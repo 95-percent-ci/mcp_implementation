@@ -30,3 +30,55 @@ class CustomEncoder(json.JSONEncoder):
     
 
 # Instantiate Google Gemini LLM with deterministic output and retry logic
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash-preview-04-17",
+    temperature=0,
+    max_retries=2,
+    google_api_keys=os.getenv("GOOGLE_API_KEY")
+)
+
+# Require server script path as command-line argument
+if len(sys.argv) < 2:
+    print("Usage: python client_langchain_google_genai_bind_tools.py <path_to_server_script>")
+    sys.exit(1)
+server_script = sys.argv[1]
+
+# Configure MCP server starup parameters
+server_params = StdioServerParameters(
+    command="python" if server_script.endswith(".py") else "node",
+    args=[server_script]
+)
+
+# Global holder for the active MCP session (used by tool adapter)
+mcp_client = None
+
+# Main async function: connect, load tools, create agent, run chat loop
+async def run_agent():
+    global mcp_client
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            mcp_client = type("MCPClientHolder", (), {"session": session})()
+            tools = await load_mcp_tools(session)
+            agent = create_react_agent(llm, tools)
+            print("MCP Client Started! Type 'quit' to exit.")
+            while True:
+                query = input("\\nQuery: ").strip()
+                if query.lower() == "quit": break
+                # Send user query to agent and print formatted response
+                response = await agent.ainvoke({"messages": query})
+                try:
+                    formatted = json.dumps(response, indent=2, cls=CustomEncoder)
+                except Exception:
+                    formatted = str(response)
+                print("\\nResponse:")
+                print(formatted)
+
+    return
+
+
+# Entry Point: Run Async Agent Loop
+if __name__ == "__main__":
+    asyncio.run(run_agent())
+
+            
